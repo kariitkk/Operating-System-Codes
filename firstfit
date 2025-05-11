@@ -1,0 +1,44 @@
+#include<stdio.h>
+
+int main(){
+    int np,nb;
+    printf("Enter No of process:");
+    scanf("%d",&np);
+    printf("Enter No of block:");
+    scanf("%d",&nb);
+    int p[np],bn[np],frag[np];
+    int b[nb],bf[nb];
+
+    printf("Enter Size of Process:");
+    for(int i=0;i<np;i++){
+        scanf("%d",&p[i]);
+        bn[i]=-1;
+        frag[i]=0;
+    }
+
+    printf("Enter Size of Block:");
+    for(int i=0;i<nb;i++){
+        scanf("%d",&b[i]);
+        bf[i]=0;
+    }
+
+    for(int i=0;i<np;i++){
+        for(int j=0;j<nb;j++){
+            if(bf[j]==0 && b[j] > p[i]){
+                bn[i]=j;
+                frag[j]=b[j]-p[i];
+                bf[j]=1;
+                break;
+            }
+        }
+    }
+
+    printf("Process No\tProcess Size\tBlock No\tBlock Size\tFragmentation\n");
+    for(int i=0;i<np;i++){
+        printf("%d\t\t%d\t\t", i+1,p[i]);
+        if(bn[i] != -1){
+            printf("%d\t\t%d\t\t%d\n",bn[i]+1,b[bn[i]],frag[i]);
+        }
+
+    }
+}
