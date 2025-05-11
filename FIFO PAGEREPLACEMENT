@@ -1,0 +1,57 @@
+#include<stdio.h>
+int main(){
+    int np,nf,flag;
+    int position=0,hit=0,fault=0;
+
+    printf("Enter No of pages:");
+    scanf("%d",&np);
+    printf("Enter No of frames:");
+    scanf("%d",&nf);
+
+    int p[np],f[nf];
+
+    printf("Enter Page Sequence:");
+    for(int i=0;i<np;i++){
+        scanf("%d",&p[i]);
+    }
+
+    printf("Page\t");
+    for(int i=0;i<nf;i++){
+        printf("F%d\t",i);
+    }
+    printf("Status\n");
+
+    for(int i=0;i<np;i++){
+        flag=0;
+        for(int j=0;i<nf;j++){
+            if(p[i]==f[j]){
+               hit++;
+               flag=1;
+               break;
+
+            }
+        }
+
+        if(flag==0){
+            f[position]=p[i];
+            fault++;
+            position=(position+1)%nf;
+        }
+
+        printf("%d\t",p[i]);
+        for(int j=0;j<nf;j++){
+            printf("%d\t",f[j]);
+        }
+        if(flag){
+            printf("Hit");
+        }
+        else{
+            printf("Miss");
+        }
+    }
+
+    printf("No of Hits:%d\n",hit);
+    printf("No of Faults:%d\n",fault);
+    printf("Hit Ratio : %f\n",((float)hit/np));
+    printf("Fault Ratio : %f\n",((float)fault/np));
+}
