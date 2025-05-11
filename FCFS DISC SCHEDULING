@@ -1,0 +1,28 @@
+#include<stdio.h>
+#include<stdlib.h>
+int main(){
+    int n,head,tracks, distance=0;
+    int disc_seq[200];
+    printf("Enter No of Discs:");
+    scanf("%d",&n);
+
+    printf("Enter Disc Sequence:");
+    for(int i=0;i<n;i++){
+        scanf("%d",&disc_seq[i]);
+    }
+
+    printf("Enter Head Position:");
+    scanf("%d",&head);
+
+    printf("Enter Total no of tracks:");
+    scanf("%d",&tracks);
+
+    printf("Head movement : %d",head);
+    for(int i=0;i<n;i++){
+        distance += abs(head-disc_seq[i]);
+        head=disc_seq[i];
+        printf("->%d",head);
+    }
+
+    printf("\nTotal No of Head Movement:%d",distance);
+}
