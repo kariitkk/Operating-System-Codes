@@ -1,0 +1,90 @@
+#include<stdio.h>
+int main(){
+    int np,ns,flag;
+    int allocation[10][10],maximum[10][10],need[10][10];
+    int availble[10],finish[10]={0},safeseq[10];
+
+    printf("Enter no of Process:");
+    scanf("%d",&np);
+    printf("Enter no of Resource:");
+    scanf("%d",&ns);
+
+    printf("Enter Allocation Matrix:\n");
+    for(int i=0;i<np;i++){
+        for(int j=0;j<ns;j++){
+            scanf("%d",&allocation[i][j]);
+        }
+    }
+
+    printf("Enter Maximum Matrix:\n");
+    for(int i=0;i<np;i++){
+        for(int j=0;j<ns;j++){
+            scanf("%d",&maximum[i][j]);
+        }
+    }
+
+    printf("Enter Available resource:\n");
+    for(int i=0;i<ns;i++){
+        scanf("%d",&availble[i]);
+    }
+
+    for(int i=0;i<np;i++){
+        for(int j=0;j<ns;j++){
+            need[i][j]=maximum[i][j]-allocation[i][j];
+        }
+    }
+
+
+    printf("Process\tAllocation\tMaximum\tNeed\n");
+
+    for(int i=0;i<np;i++){
+        printf("%d\t",i);
+
+        for(int j=0;j<ns;j++){
+            printf("%d\t",allocation[i][j]);
+        }
+        for(int j=0;j<ns;j++){
+            printf("%d\t",maximum[i][j]);
+        }
+        for(int j=0;j<ns;j++){
+            printf("%d\n",need[i][j]);
+        }
+    }
+    printf("Available resource:");
+    for(int i=0;i<ns;i++){
+        printf("%d\t",availble[i]);
+    }
+
+    int k=0;
+    while(k < np){
+        flag=0;
+        for(int i=0;i<np;i++){
+            int j;
+            if(!finish[i]){
+                for(j=0;j<ns;j++){
+                    if(need[i][j] > availble[j]){
+                        break;
+                }
+            }
+
+        if(j == ns){
+            for(j=0;j<ns;j++){
+                availble[j]+=allocation[i][j];
+            }
+                safeseq[k++]=i;
+                finish[i]=1;
+                flag=1;
+            }
+        }
+    }
+        if(!flag){
+            printf("Deadlock Occured");
+        }
+    }
+
+    printf("Safe Sequence: ");
+    for(int i=0;i<k;i++){
+        printf("P%d ",safeseq[i]);
+    }
+    
+}
