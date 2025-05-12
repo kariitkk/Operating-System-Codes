@@ -1,0 +1,91 @@
+#include <stdio.h>
+#include <stdlib.h>
+
+void CSCAN(int request[], int n, int head, int disk_size) {
+    int seek_count = 0;
+    int distance, cur_track;
+    int* left = (int*)malloc(n * sizeof(int));
+    int* right = (int*)malloc(n * sizeof(int));
+    int left_count = 0, right_count = 0;
+
+    // Tracks on left and right of head
+    for (int i = 0; i < n; i++) {
+        if (request[i] < head)
+            left[left_count++] = request[i];
+        else
+            right[right_count++] = request[i];
+    }
+
+    // Add the end values
+    left[left_count++] = 0;
+    right[right_count++] = disk_size - 1;
+
+    // Sort left and right arrays
+    for (int i = 0; i < left_count - 1; i++) {
+        for (int j = 0; j < left_count - i - 1; j++) {
+            if (left[j] > left[j + 1]) {
+                int temp = left[j];
+                left[j] = left[j + 1];
+                left[j + 1] = temp;
+            }
+        }
+    }
+    for (int i = 0; i < right_count - 1; i++) {
+        for (int j = 0; j < right_count - i - 1; j++) {
+            if (right[j] > right[j + 1]) {
+                int temp = right[j];
+                right[j] = right[j + 1];
+                right[j + 1] = temp;
+            }
+        }
+    }
+
+    printf("C-SCAN Disk Scheduling Algorithm\n");
+    printf("Sequence of head movement:\n");
+
+    // Move towards right
+    for (int i = 0; i < right_count; i++) {
+        cur_track = right[i];
+        distance = abs(cur_track - head);
+        seek_count += distance;
+        head = cur_track;
+        printf("%d ", cur_track);
+    }
+
+    // Jump to beginning
+    head = 0;
+    seek_count += disk_size - 1;
+
+    // Move towards right again on left side
+    for (int i = 0; i < left_count; i++) {
+        cur_track = left[i];
+        distance = abs(cur_track - head);
+        seek_count += distance;
+        head = cur_track;
+        printf("%d ", cur_track);
+    }
+
+    printf("\nTotal seek operations = %d\n", seek_count);
+
+    free(left);
+    free(right);
+}
+
+int main() {
+    int n, head, disk_size;
+    printf("Enter the number of disk requests: ");
+    scanf("%d", &n);
+    int request[n];
+    printf("Enter the disk requests sequence:\n");
+    for (int i = 0; i < n; i++) {
+        scanf("%d", &request[i]);
+    }
+    printf("Enter initial head position: ");
+    scanf("%d", &head);
+    printf("Enter disk size: ");
+    scanf("%d", &disk_size);
+
+    CSCAN(request, n, head, disk_size);
+
+    return 0;
+}
