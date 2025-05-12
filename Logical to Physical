@@ -1,0 +1,40 @@
+#include<stdio.h>
+
+int main(){
+    int n,pagetable[100],pagesize,logicaladd;
+    int pagenum,framenum,offset,physicaladd;
+
+    printf("Enter No of pages:");
+    scanf("%d",&n);
+
+    printf("Enter frame no of each table:");
+    for(int i=0;i<n;i++){
+        scanf("%d",&pagetable[i]);
+    }
+    printf("Enter page size:");
+    scanf("%d",&pagesize);
+    printf("Enter logical address:");
+    scanf("%d",&logicaladd);
+
+    pagenum=logicaladd/pagesize;
+    if(pagesize> n ){
+        printf("Page not found");
+    }
+    framenum=pagetable[pagenum];
+    offset=logicaladd % pagesize;
+
+    if(framenum < 0){
+        printf("Invalid frame number");
+    }
+
+    physicaladd=framenum*pagesize + offset;
+
+    printf("Logical Address: %d\n",logicaladd);
+    printf("Page Number: %d\n",pagenum);
+    printf("Frame Number: %d\n",framenum);
+    printf("Offset: %d\n",offset);
+    printf("Physical Address: %d\n",physicaladd);
+
+    return 0;
+
+}
