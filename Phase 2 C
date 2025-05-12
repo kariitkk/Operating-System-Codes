@@ -1,0 +1,923 @@
+//C program for OS Phase 2 with multiple jobs handling - FIXED VERSION
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <time.h>
+
+#define RAM_ROWS 300
+#define RAM_COLS 4
+#define PAGE_TABLE_SIZE 10
+#define VIRTUAL_MEMORY_SIZE 100
+#define MAX_FRAMES 30
+#define MAX_JOBS 10
+
+char ram[RAM_ROWS][RAM_COLS + 1]; // +1 for null terminator
+char outputBuffer[1000];
+int outputIndex = 0;
+
+typedef struct {
+    int jobId;
+    char output[1000];
+    int PTR;
+    int TTL;
+    int TLL;
+    int usedFrames[MAX_FRAMES]; // Track frames used by this job
+    int frameCount;             // Count of frames used
+    long dataPosition;          // Position in input file where $DTA starts
+} JobInfo;
+
+JobInfo jobs[MAX_JOBS];
+int jobCount = 0;
+int currentJob = 0;
+
+char jobOutput[1000];  // To store job output for final display
+int jobOutputIndex = 0;
+int PTR;                    // Page Table Register
+int TI = 0, SI = 0, PI = 0; // Timer, Supervisor, Program Interrupts
+int TTC = 0, LLC = 0;       // Time & Line Counters
+int TTL = 0, TLL = 0;       // Time & Line Limits (set from job card)
+int valid[MAX_FRAMES];      // Tracks allocated frames
+
+// CPU Registers
+char IR[5], R[5]; // Instruction Register, General Register
+int IC = 0;       // Instruction Counter
+int C = 0;        // Comparison Flag
+
+FILE *inputFile;
+FILE *outputFile;
+
+void trimSpaces(char *str) {
+    int i = strlen(str) - 1;
+    while (i >= 0 && isspace(str[i])) {
+        str[i--] = '\0';
+    }
+}
+
+void debugInstruction(char *instr, int address) {
+    printf("DEBUG: Instruction at %d: [%02X][%02X][%02X][%02X] ('%c%c%c%c')\n", 
+           address, 
+           instr[0], instr[1], instr[2], instr[3],
+           isprint(instr[0]) ? instr[0] : '.',
+           isprint(instr[1]) ? instr[1] : '.',
+           isprint(instr[2]) ? instr[2] : '.',
+           isprint(instr[3]) ? instr[3] : '.');
+}
+
+void sortJobsByID() {
+    for (int i = 0; i < jobCount - 1; i++) {
+        for (int j = 0; j < jobCount - i - 1; j++) {
+            if (jobs[j].jobId > jobs[j + 1].jobId) {
+                JobInfo temp = jobs[j];
+                jobs[j] = jobs[j + 1];
+                jobs[j + 1] = temp;
+            }
+        }
+    }
+    
+    printf("Jobs sorted by ID:\n");
+    for (int i = 0; i < jobCount; i++) {
+        printf("Position %d: Job ID %d, TTL: %d, TLL: %d\n", 
+               i, jobs[i].jobId, jobs[i].TTL, jobs[i].TLL);
+    }
+}
+
+void cleanupJob() {
+    // Clear memory used by the current job
+    for (int i = 0; i < jobs[currentJob].frameCount; i++) {
+        int frame = jobs[currentJob].usedFrames[i];
+        for (int j = 0; j < 10; j++) {
+            memset(ram[frame * 10 + j], '*', RAM_COLS);
+            ram[frame * 10 + j][RAM_COLS] = '\0';
+        }
+        valid[frame] = 0; // Mark frame as free
+    }
+    
+    // Reset job's frame data
+    jobs[currentJob].frameCount = 0;
+    
+    // Reset other registers
+    TTC = 0;
+    LLC = 0;
+    IC = 0;
+    TI = 0;
+    SI = 0;
+    PI = 0;
+
+    memset(IR, '\0', sizeof(IR));
+    memset(R, '\0', sizeof(R));
+
+    jobOutput[0] = '\0';
+    jobOutputIndex = 0;
+}
+
+void initializeSystem() {
+    for (int i = 0; i < RAM_ROWS; i++) {
+        memset(ram[i], '*', RAM_COLS);
+        ram[i][RAM_COLS] = '\0';
+    }
+    
+    memset(valid, 0, sizeof(valid));
+    outputBuffer[0] = '\0';
+    outputIndex = 0;
+
+    srand(time(NULL));
+    TI = 0;
+    SI = 0;
+    PI = 0;
+    TTC = 0;
+    LLC = 0;
+    C = 0;
+
+    printf("System initialized\n");
+}
+
+int allocateFrame() {
+    int frame = rand() % MAX_FRAMES;
+    int start_frame = frame;
+
+    while (valid[frame]) {
+        frame = (frame + 1) % MAX_FRAMES;
+        if (frame == start_frame) {
+            return -1; // No free frames
+        }
+    }
+
+    valid[frame] = 1;
+    
+    // Make sure this index is valid
+    if (jobs[currentJob].frameCount < MAX_FRAMES) {
+        jobs[currentJob].usedFrames[jobs[currentJob].frameCount++] = frame;
+    } else {
+        printf("Warning: Frame tracking array full for job %d\n", jobs[currentJob].jobId);
+    }
+    
+    return frame;
+}
+
+int getPageTableEntry(int page) {
+    char high = ram[PTR + page][0];
+    char low = ram[PTR + page][1];
+
+    if (high == '' || low == '') {
+        return -1; // Frame not assigned
+    }
+
+    int frame = (high - '0') * 10 + (low - '0');
+    return frame;
+}
+
+void setPageTableEntry(int page, int frame) {
+    if (frame == -1) {
+        ram[PTR + page][0] = '*';
+        ram[PTR + page][1] = '*';
+    }
+    else {
+        ram[PTR + page][0] = (frame / 10) + '0';
+        ram[PTR + page][1] = (frame % 10) + '0';
+    }
+    ram[PTR + page][2] = '*';
+    ram[PTR + page][3] = '*';
+    ram[PTR + page][RAM_COLS] = '\0';
+}
+
+int addressMap(int virtualAddress) {
+    if (virtualAddress < 0 || virtualAddress >= VIRTUAL_MEMORY_SIZE) {
+        PI = 2; // Invalid operand
+        return -1;
+    }
+
+    int page = virtualAddress / 10;
+    int offset = virtualAddress % 10;
+
+    if (page >= PAGE_TABLE_SIZE) {
+        PI = 2; // Invalid page
+        return -1;
+    }
+
+    if (ram[PTR + page][0] == '*') {
+        PI = 3; // Page fault
+        return -1;
+    }
+
+    if (!isdigit(ram[PTR + page][0]) || !isdigit(ram[PTR + page][1])) {
+        PI = 2; // Invalid frame number
+        return -1;
+    }
+
+    int frame = (ram[PTR + page][0] - '0') * 10 + (ram[PTR + page][1] - '0');
+    return frame * 10 + offset;
+}
+
+// MOS (Master Mode Supervisor)
+void MOS() {
+    if (TI == 0 && SI == 1) { // GD (Get Data)
+        char line[41];
+        printf("MOS: Processing GD instruction\n");
+
+        if (fgets(line, sizeof(line), inputFile) == NULL) {
+            printf("Error: Out of data\n");
+            fprintf(outputFile, "Error: Out of data\n");
+            strcat(jobOutput, "Error: Out of data\n");
+            
+            SI = 3; // Set to halt
+            return;
+        }
+        line[strcspn(line, "\n")] = '\0';
+
+        if (strncmp(line, "$END", 4) == 0) {
+            printf("End of data marker found\n");
+            SI = 3;
+            return;
+        }
+
+        if (strncmp(line, "$AMJ", 4) == 0 || strncmp(line, "$DTA", 4) == 0 || strncmp(line, "$END", 4) == 0) {
+            SI = 1; // Keep SI=1 to try reading again
+            return;
+        }
+
+        int operandAddress = (IR[2] - '0') * 10 + (IR[3] - '0');
+        int ra = addressMap(operandAddress);
+
+        if (PI == 3) { // Page fault
+            int page = operandAddress / 10;
+            int frame = allocateFrame();
+            if (frame == -1) {
+                printf("Error: No free frames available\n");
+                fprintf(outputFile, "Error: No free frames available\n");
+                strcat(jobOutput, "Error: No free frames available\n");
+                
+                SI = 3; // Set to halt
+                return;
+            }
+            setPageTableEntry(page, frame);
+            PI = 0;
+            ra = addressMap(operandAddress);
+        }
+
+        int memPos = ra;
+        int linePos = 0;
+
+        // Clear memory block before writing new data
+        for (int i = 0; i < 10; i++) {
+            if (memPos % 10 == 0 && i > 0) break;
+            memset(ram[memPos + i], ' ', RAM_COLS);
+        }
+
+        while (linePos < strlen(line)) {
+            char block[5] = {' ', ' ', ' ', ' ', '\0'};
+            int chars = 0;
+
+            for (int i = 0; i < 4 && linePos < strlen(line); i++, linePos++) {
+                block[i] = line[linePos];
+                chars++;
+            }
+
+            strncpy(ram[memPos], block, 4);
+            ram[memPos][4] = '\0';
+            printf("Stored in memory at %d: %.4s\n", memPos, ram[memPos]);
+            memPos++;
+
+            if (memPos % 10 == 0) {
+                int virtualAddr = (operandAddress / 10 * 10) + (memPos - ra);
+                int page = virtualAddr / 10;
+
+                if (page < PAGE_TABLE_SIZE && ram[PTR + page][0] == '*') {
+                    int frame = allocateFrame();
+                    if (frame == -1) {
+                        printf("Error: No free frames available\n");
+                        fprintf(outputFile, "Error: No free frames available\n");
+                        strcat(jobOutput, "Error: No free frames available\n");
+                        
+                        SI = 3; // Set to halt
+                        return;
+                    }
+                    setPageTableEntry(page, frame);
+                }
+
+                int newRa = addressMap(virtualAddr);
+                if (PI != 0) {
+                    printf("Error: Could not map address\n");
+                    fprintf(outputFile, "Error: Could not map address\n");
+                    strcat(jobOutput, "Error: Could not map address\n");
+                    
+                    SI = 3; // Set to halt
+                    return;
+                }
+                memPos = newRa;
+            }
+        }
+
+        if (linePos < 40) {
+            strncpy(ram[memPos], "    ", 4);
+            ram[memPos][4] = '\0';
+        }
+
+        SI = 0;
+    }
+    else if (TI == 0 && SI == 2) { // PD (Print Data)
+        int operandAddress = (IR[2] - '0') * 10 + (IR[3] - '0');
+        printf("MOS: Processing PD instruction for address %d\n", operandAddress);
+
+        int ra = addressMap(operandAddress);
+
+        if (PI == 3) { // Page fault
+            int page = operandAddress / 10;
+            int frame = allocateFrame();
+            if (frame == -1) {
+                printf("Error: No free frames available\n");
+                fprintf(outputFile, "Error: No free frames available\n");
+                strcat(jobOutput, "Error: No free frames available\n");
+                
+                SI = 3; // Halt execution
+                return;
+            }
+            setPageTableEntry(page, frame);
+            PI = 0;
+            ra = addressMap(operandAddress);
+        }
+
+        char buffer[100] = {0};
+        int bufPos = 0;
+
+        int virtualAddr = operandAddress;
+        while (virtualAddr < VIRTUAL_MEMORY_SIZE) {
+            int page = virtualAddr / 10;
+
+            if (page >= PAGE_TABLE_SIZE || ram[PTR + page][0] == '*') {
+                break;
+            }
+
+            int ra = addressMap(virtualAddr);
+            if (PI != 0) break;
+
+            printf("Reading memory at %d: %.4s\n", ra, ram[ra]);
+            
+            // Only break if all four characters are spaces
+            if (ram[ra][0] == ' ' && ram[ra][1] == ' ' && ram[ra][2] == ' ' && ram[ra][3] == ' ')
+                break;
+
+            for (int i = 0; i < 4; i++) {
+                if (ram[ra][i] != '*') {
+                    buffer[bufPos++] = ram[ra][i];
+                }
+            }
+
+            virtualAddr++;
+            if (virtualAddr % 10 == 0)
+                break;
+        }
+
+        buffer[bufPos] = '\0';
+        trimSpaces(buffer);
+
+        if (strlen(buffer) > 0) {  
+            printf("Printing: %s\n", buffer);
+            if (jobOutputIndex + strlen(buffer) + 2 < sizeof(jobOutput)) {
+                strcpy(jobOutput + jobOutputIndex, buffer);
+                jobOutputIndex += strlen(buffer);
+                jobOutput[jobOutputIndex++] = '\n';
+                jobOutput[jobOutputIndex] = '\0';
+            }
+            
+            LLC++;  
+        
+            if (LLC > TLL) {
+                printf("Error: Line Limit Exceeded\n");
+                strcat(jobOutput, "Error: Line Limit Exceeded\n");
+                SI = 3; 
+                return;
+            }
+        }
+
+        SI = 0;
+    }
+    else if (TI == 0 && SI == 3) { // H (Halt)
+        printf("Program terminated normally.\n");
+
+        strcat(jobOutput, "Program terminated normally.\n");    
+        SI = 0;
+        strcpy(jobs[currentJob].output, jobOutput);
+    }
+    else if (TI == 2) { // Time Limit Exceeded
+        printf("Job %d: Time Limit Exceeded\n", jobs[currentJob].jobId);
+        strcat(jobOutput, "Error: Time Limit Exceeded\n");
+        strcpy(jobs[currentJob].output, jobOutput);
+    }
+    else if (PI == 1) { // Invalid Opcode
+        printf("Job %d: Invalid Opcode\n", jobs[currentJob].jobId);
+        strcat(jobOutput, "Error: Invalid Opcode\n");
+        strcpy(jobs[currentJob].output, jobOutput);
+    }
+    else if (PI == 2) { // Invalid Operand
+        printf("Job %d: Invalid Operand\n", jobs[currentJob].jobId);
+        strcat(jobOutput, "Error: Invalid Operand\n");
+        strcpy(jobs[currentJob].output, jobOutput);
+    }
+    else if (PI == 3) { // Page Fault
+        int operandAddress = (IR[2] - '0') * 10 + (IR[3] - '0');
+        int page = operandAddress / 10;
+
+        if (page >= PAGE_TABLE_SIZE) {
+            PI = 2;
+            MOS();
+            return;
+        }
+
+        int frame = allocateFrame();
+        if (frame == -1) {
+            printf("Job %d: No free frames available\n", jobs[currentJob].jobId);
+            strcat(jobOutput, "Error: No free frames available\n");
+            strcpy(jobs[currentJob].output, jobOutput);
+            return;
+        }
+
+        setPageTableEntry(page, frame);
+        printf("Allocated frame %d for page %d\n", frame, page);
+        PI = 0;
+    }
+}
+
+int parseJobCard(char *line) {
+    int jobId, jobTTL, jobTLL;
+    
+    if (sscanf(line + 4, "%4d%4d%4d", &jobId, &jobTTL, &jobTLL) != 3) {
+        printf("Error: Invalid job parameters in line: %s\n", line);
+        return -1;
+    }
+    
+    jobs[jobCount].jobId = jobId;
+    jobs[jobCount].TTL = jobTTL;
+    jobs[jobCount].TLL = jobTLL;
+    jobs[jobCount].output[0] = '\0';
+    jobs[jobCount].frameCount = 0;
+    jobs[jobCount].dataPosition = -1;   
+
+    TTL = jobTTL;
+    TLL = jobTLL;
+    
+    return jobId;
+}
+
+int scanForJobs() {
+    char line[256];
+    jobCount = 0;
+    
+    rewind(inputFile);
+    
+    while (fgets(line, sizeof(line), inputFile) != NULL && jobCount < MAX_JOBS) {
+        line[strcspn(line, "\n")] = '\0';
+        
+        if (strncmp(line, "$AMJ", 4) == 0) {
+            int jobId = parseJobCard(line);
+            if (jobId != -1) {
+                printf("Found Job ID: %d, TTL: %d, TLL: %d\n", 
+                       jobs[jobCount].jobId, jobs[jobCount].TTL, jobs[jobCount].TLL);
+                long currentPos = ftell(inputFile);
+                while (fgets(line, sizeof(line), inputFile) != NULL) {
+                    if (strncmp(line, "$DTA", 4) == 0) {
+                        jobs[jobCount].dataPosition = ftell(inputFile);
+                        break;
+                    }
+                    if (strncmp(line, "$END", 4) == 0 || strncmp(line, "$AMJ", 4) == 0) {
+                        break;
+                    }
+                }
+                fseek(inputFile, currentPos, SEEK_SET);
+                jobCount++;
+            }
+        }
+    }
+    
+    printf("Found %d jobs in input file\n", jobCount);
+    return jobCount;
+}
+
+int getFrameFromPageTable(int page) {
+    int entry = PTR + page;
+    if (ram[entry][0] == '*') return -1;
+    return getPageTableEntry(page); // You should already have this
+}
+
+void loadProgram(int jobIndex) {
+    for (int i = 0; i < MAX_FRAMES; i++) {
+        valid[i] = 0;
+    }
+
+    char line[256];
+    int foundJob = 0;
+    int inDataSection = 0;
+    int currentJobId = jobs[jobIndex].jobId;
+
+    currentJob = jobIndex;
+    TTL = jobs[jobIndex].TTL;
+    TLL = jobs[jobIndex].TLL;
+    jobs[jobIndex].frameCount = 0;
+
+    printf("Looking for Job ID: %d\n", currentJobId);
+
+    rewind(inputFile);
+
+    int programCounter = 0;
+
+    while (fgets(line, sizeof(line), inputFile) != NULL) {
+        line[strcspn(line, "\n")] = '\0';
+
+        if (strncmp(line, "$AMJ", 4) == 0) {
+            int jobId;
+            if (sscanf(line + 4, "%4d", &jobId) == 1 && jobId == currentJobId) {
+                foundJob = 1;
+                printf("Loading Job ID: %d\n", jobId);
+
+                PTR = allocateFrame() * 10;
+                jobs[jobIndex].PTR = PTR;
+                printf("Page Table allocated at frame: %d (absolute address: %d)\n", PTR / 10, PTR);
+
+                for (int i = 0; i < PAGE_TABLE_SIZE; i++) {
+                    setPageTableEntry(i, -1);
+                }
+
+                continue;
+            } else if (foundJob) {
+                break;
+            }
+        }
+
+        if (!foundJob) continue;
+
+        if (strncmp(line, "$DTA", 4) == 0) {
+            printf("Data section marker found\n");
+            inDataSection = 1;
+            continue;
+        }
+
+        if (strncmp(line, "$END", 4) == 0) {
+            printf("End of job marker found\n");
+            break;
+        }
+
+        if (!inDataSection) {
+            // Clean up the line by removing all whitespace
+            char cleanedLine[256] = {0};
+            int cleanIndex = 0;
+
+            for (int i = 0; i < strlen(line); i++) {
+                if (!isspace(line[i])) {
+                    cleanedLine[cleanIndex++] = line[i];
+                }
+            }
+            cleanedLine[cleanIndex] = '\0';
+
+            if (strlen(cleanedLine) == 0) continue;
+
+            for (int i = 0; i < strlen(cleanedLine); i += 4) {
+                char instr[5] = "    ";
+                int instrSize = (strlen(cleanedLine) - i >= 4) ? 4 : strlen(cleanedLine) - i;
+                strncpy(instr, cleanedLine + i, instrSize);
+                instr[4] = '\0';
+
+                if (strlen(instr) < 2) continue;
+
+                int page = programCounter / 10;
+                int offset = programCounter % 10;
+
+                if (page >= PAGE_TABLE_SIZE) {
+                    printf("Error: Program exceeds virtual memory limits\n");
+                    return;
+                }
+
+                int frame = getPageTableEntry(page);
+                if (frame == -1) {
+                    frame = allocateFrame();
+                    if (frame == -1) {
+                        printf("Error: No free frames available\n");
+                        return;
+                    }
+                    setPageTableEntry(page, frame);
+                    printf("Allocated frame %d for page %d\n", frame, page);
+                }
+
+                int physAddr = frame * 10 + offset;
+                strncpy(ram[physAddr], instr, 4);
+                ram[physAddr][4] = '\0';
+
+                printf("Loaded instruction %.4s at virtual address %d (physical: %d)\n",
+                       instr, programCounter, physAddr);
+
+                programCounter++;
+            }
+        }
+    }
+
+    if (!foundJob) {
+        printf("Error: Job %d not found in input file\n", jobs[jobIndex].jobId);
+    } else {
+        printf("Job %d loaded successfully\n", jobs[jobIndex].jobId);
+    }
+}
+
+// Program Execution
+void executeProgram() {
+    IC = 0;
+    TTC = 0;
+    LLC = 0;
+    C = 0;
+    TI = 0;
+    PI = 0;
+    SI = 0;
+    memset(IR, '\0', sizeof(IR));
+    memset(R, '\0', sizeof(R));
+    
+    jobOutput[0] = '\0';
+    jobOutputIndex = 0;
+
+    if (jobs[currentJob].dataPosition >= 0) {
+        fseek(inputFile, jobs[currentJob].dataPosition, SEEK_SET);
+    }
+
+    printf("\nExecuting program for Job %d...\n", jobs[currentJob].jobId);
+
+    char halt = 0;
+
+    while (!halt) {
+        int realAddress = addressMap(IC);
+        if (PI != 0) {
+            MOS();
+            if (PI != 0 || TI != 0 || SI == 3) break;
+            realAddress = addressMap(IC);
+            if (PI != 0) break;
+        }
+
+        strncpy(IR, ram[realAddress], 4);
+        IR[4] = '\0';
+        trimSpaces(IR);
+        printf("Executing instruction: '%.4s' at address %d (physical: %d)\n", IR, IC, realAddress);
+        debugInstruction(IR, IC);
+        IC++;
+
+        // Skip if IR is empty or contains only spaces/asterisks
+        if (strlen(IR) == 0 || IR[0] == '*' || (IR[0] == ' ' && IR[1] == ' ')) {
+            continue;
+        }
+
+        char opcode[3] = {IR[0], IR[1], '\0'};
+        trimSpaces(opcode);
+        int operandAddress = -1;
+        
+        if (strlen(IR) >= 4 && isdigit(IR[2]) && isdigit(IR[3])) { 
+            operandAddress = (IR[2] - '0') * 10 + (IR[3] - '0');
+        } else if (strlen(IR) >= 3 && isdigit(IR[2])) {
+            operandAddress = IR[2] - '0';
+        } else {
+            // Handle single-letter opcodes like 'H'
+            if (strcmp(opcode, "H") == 0 || IR[0] == 'H') {
+                TTC += 1;
+                if (TTC > TTL) {
+                    TI = 2;
+                    MOS();
+                    break;
+                }
+                SI = 3;
+                MOS();
+                halt = 1;
+                continue;
+            }
+            
+            PI = 1; // Invalid opcode
+            MOS();
+            break;
+        }
+        
+        printf("DEBUG: Parsed opcode: '%s' with operand: %d\n", opcode, operandAddress);
+
+        if (strcmp(opcode, "GD") == 0) {
+            TTC += 2;
+            if (TTC > TTL) {
+                TI = 2;
+                MOS();
+                break;
+            }
+            SI = 1;
+            MOS();
+            if (SI == 3) halt = 1;
+        }
+        else if (strcmp(opcode, "PD") == 0) {
+            TTC += 1;
+            if (TTC > TTL) {
+                TI = 2;
+                MOS();
+                break;
+            }
+            SI = 2;
+            MOS();
+            if (SI == 3) halt = 1;
+        }
+        else if (strcmp(opcode, "H") == 0 || strcmp(opcode, "H ") == 0) {
+            TTC += 1;
+            if (TTC > TTL) {
+                TI = 2;
+                MOS();
+                break;
+            }
+            SI = 3;
+            MOS();
+            halt = 1;
+        }
+        else if (strcmp(opcode, "LR") == 0) {
+            TTC += 1;
+            if (TTC > TTL) {
+                TI = 2;
+                MOS();
+                break;
+            }
+
+            int ra = addressMap(operandAddress);
+            if (PI != 0) {
+                MOS();
+                if (PI != 0 || SI == 3) break;
+                ra = addressMap(operandAddress);
+                if (PI != 0) break;
+            }
+
+            strncpy(R, ram[ra], 4);
+            R[4] = '\0';
+            printf("Loaded R with value: %.4s\n", R);
+        }
+        else if (strcmp(opcode, "SR") == 0) {
+            TTC += 2;
+            if (TTC > TTL) {
+                TI = 2;
+                MOS();
+                break;
+            }
+
+            int ra = addressMap(operandAddress);
+            if (PI != 0) {
+                MOS();
+                if (PI != 0 || SI == 3) break;
+                ra = addressMap(operandAddress);
+                if (PI != 0) break;
+            }
+
+            strncpy(ram[ra], R, 4);
+            ram[ra][4] = '\0';
+            printf("Stored R value %.4s at address %d\n", R, operandAddress);
+        }
+        else if (strcmp(opcode, "CR") == 0) {
+            TTC += 1;
+            if (TTC > TTL) {
+                TI = 2;
+                MOS();
+                break;
+            }
+        
+            int ra = addressMap(operandAddress);
+            if (PI != 0) {
+                MOS();
+                if (PI != 0 || SI == 3) break;
+                ra = addressMap(operandAddress);
+                if (PI != 0) break;
+            }
+        
+            // Ensure we're comparing the full 4 characters
+            char tempR[5] = {0}, tempMem[5] = {0};
+            strncpy(tempR, R, 4);
+            strncpy(tempMem, ram[ra], 4);
+            tempR[4] = tempMem[4] = '\0'; // Explicit null termination
+            
+            // More thorough comparison logic
+            int match = 1;
+            for (int i = 0; i < 4; i++) {
+                if (tempR[i] != tempMem[i]) {
+                    match = 0;
+                    break;
+                }
+            }
+            C = match;
+            
+            printf("Comparing R (%.4s) with Memory (%.4s): %s\n",
+                   tempR, tempMem, C ? "Equal" : "Not Equal");
+        }
+        else if (strcmp(opcode, "BT") == 0) {
+            TTC += 1;
+            if (TTC > TTL) {
+                TI = 2;
+                MOS();
+                break;
+            }
+        
+            printf("BT instruction with C=%d\n", C);
+            if (C == 1) {
+                printf("Branching to address %d\n", operandAddress);
+                IC = operandAddress;  // This should jump to the instruction that prints "Match"
+                
+                // Debug output to verify the branch
+                printf("After branch, IC = %d\n", IC);
+                int debugAddr = addressMap(IC);
+                if (debugAddr != -1) {
+                    printf("Next instruction at %d: %.4s\n", IC, ram[debugAddr]);
+                }
+            }
+        }
+        else {
+            printf("Invalid opcode: '%.2s' (hex: %02X %02X)\n", opcode, opcode[0], opcode[1]);
+            PI = 1;
+            MOS();
+            break;
+        }
+
+        if (TI != 0 || PI != 0 || SI == 3) {
+            MOS();
+            break;
+        }
+    }
+
+    printf("Program execution completed for Job %d\n", jobs[currentJob].jobId);
+
+    strcpy(jobs[currentJob].output, jobOutput);
+}
+
+void printMemoryState(int jobIndex) {
+    for (int i = 0; i < jobs[jobIndex].frameCount; i++) {
+        int frame = jobs[jobIndex].usedFrames[i];
+        
+        fprintf(outputFile, "Frame %d:\n", frame);
+        for (int j = 0; j < 10; j++) {
+            fprintf(outputFile, "  %03d: %.4s\n", frame * 10 + j, ram[frame * 10 + j]);
+        }
+    }
+    
+    fprintf(outputFile, "Page Table at %d:\n", jobs[jobIndex].PTR);
+    int ptr = jobs[jobIndex].PTR;
+    for (int i = 0; i < PAGE_TABLE_SIZE; i++) {
+        fprintf(outputFile, "  Entry %d: %.4s\n", i, ram[ptr + i]);
+    }
+    
+    fprintf(outputFile, "\n");
+}
+
+void printAllOutputs() {
+    fprintf(outputFile, "\n==== JOB OUTPUTS ====\n");
+    
+    for (int i = 0; i < jobCount; i++) {
+        fprintf(outputFile, "\nJob ID: %d\n", jobs[i].jobId);
+        fprintf(outputFile, "TTL: %d, TLL: %d\n", jobs[i].TTL, jobs[i].TLL);
+        fprintf(outputFile, "Output:\n%s\n", jobs[i].output);
+        fprintf(outputFile, "----------------\n");
+    }
+}
+
+int main() {
+    inputFile = fopen("inputP2MJ.txt", "r");
+    if (!inputFile) {
+        printf("Error opening input file!\n");
+        return 1;
+    }
+
+    outputFile = fopen("outputP2MJ.txt", "w");
+    if (!outputFile) {
+        printf("Error opening output file!\n");
+        fclose(inputFile);
+        return 1;
+    }
+
+    printf("OS Phase 2 started...\n");
+    int totalJobs = scanForJobs();
+    if (totalJobs == 0) {
+        printf("No jobs found in input file\n");
+        fclose(inputFile);
+        fclose(outputFile);
+        return 1;
+    }
+    sortJobsByID();
+    for (int i = 0; i < totalJobs; i++) {
+        initializeSystem();
+        loadProgram(i);
+        executeProgram();
+        cleanupJob();
+        printf("Job %d completed\n", jobs[i].jobId);
+    }
+    printAllOutputs();
+    fclose(inputFile);
+    fclose(outputFile);
+    
+    printf("All jobs processed successfully\n");
+    return 0;
+}
+
+
+
+$AMJ000400160003
+GD20GD30GD40GD50PD20PD30LR20CR30BT10PD40
+PD50H
+$DTA
+ABCD
+ABCD
+Do not
+Match
+$END0004
+$AMJ000100040001
+GD20PD20H
+$DTA
+Hello
+$END0001
