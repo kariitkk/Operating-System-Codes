@@ -14,6 +14,9 @@ int main(){
     for(int i=0;i<np;i++){
         scanf("%d",&p[i]);
     }
+    for(int i=0;i<nf;i++){
+        f[i]=-1;
+    }
 
     printf("Page\t");
     for(int i=0;i<nf;i++){
@@ -23,7 +26,7 @@ int main(){
 
     for(int i=0;i<np;i++){
         flag=0;
-        for(int j=0;i<nf;j++){
+        for(int j=0;j<nf;j++){
             if(p[i]==f[j]){
                hit++;
                flag=1;
@@ -43,10 +46,10 @@ int main(){
             printf("%d\t",f[j]);
         }
         if(flag){
-            printf("Hit");
+            printf("Hit\n");
         }
         else{
-            printf("Miss");
+            printf("Miss\n");
         }
     }
 
