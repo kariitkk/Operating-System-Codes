@@ -1,0 +1,80 @@
+#include<stdio.h>
+
+struct process{
+    int pid,at,bt,start_time,ct,tat,wt,rt;
+};
+
+void input(struct process p[],int n){
+    for(int i=0;i<n;i++){
+        printf("Enter process id:");
+        scanf("%d",&p[i].pid);
+        printf("Enter arrival time:");
+        scanf("%d",&p[i].at);
+        printf("Enter burst time:");
+        scanf("%d",&p[i].bt);
+    }
+}
+
+void GanttChart(struct process p[],int n){
+    printf("\nGantt Chart\n");
+    for(int i=0;i<n;i++){
+        printf("| %d ",p[i].pid);
+    }
+    printf("\n0");
+    for(int i=0;i<n;i++){
+        printf("    %d",p[i].ct);
+    }
+    printf("\n");
+}
+
+int main(){
+    int n;
+    float total_tat,total_wt;
+    struct process p[n];
+    printf("Enter No of process:");
+    scanf("%d",&n);
+    input(p,n);
+
+    for(int i=0;i<n;i++){
+        for(int j=0;j<n-i-1;j++){
+            if(p[j].at > p[j].at){
+                struct process temp=p[j];
+                p[j]=p[j+1];
+                p[j+1]=temp;
+            }
+        }
+    }
+    for(int i=0;i<n;i++){
+        if(i==0){
+            p[i].start_time=p[i].at;
+        }
+        else{
+            p[i].start_time=(p[i-1].ct > p[i].at )? p[i-1].ct : p[i].at;
+        }
+
+        p[i].ct=p[i].start_time+p[i].bt;
+        p[i].tat=p[i].ct-p[i].at;
+        p[i].wt=p[i].tat-p[i].bt;
+        p[i].rt=p[i].wt;
+
+        total_tat+=p[i].tat;
+        total_wt+=p[i].wt;
+
+    }
+
+    float sl=p[n-1].ct-p[0].at;
+    float throughput= n/sl;
+
+    GanttChart(p,n);
+
+    printf("\nProcessId\tArrivalTime\tBurstTime\tCompletionTime\tTAT\tWT\tRT\n");
+    for(int i=0;i<n;i++){
+        printf("%d\t\t%d\t\t%d\t\t%d\t\t%d\t\t%d\n",p[i].pid,p[i].at,p[i].bt,p[i].ct,p[i].tat,p[i].wt,p[i].rt);
+    }
+
+    printf("\nAverage TAT:%f\n",total_tat/n);
+    printf("Average WT:%f\n",total_wt/n);
+    printf("Schedule Length: %f\n",sl);
+    printf("Throughput: %f\n",throughput);
+
+}
