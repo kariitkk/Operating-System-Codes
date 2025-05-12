@@ -1,0 +1,87 @@
+#include<stdio.h>
+struct process{
+    int id,at,bt,ct,tat,wt,rt,is_complete;
+};
+
+void ganttchart(struct process p[],int sequence[],int n){
+    printf("\nGantt Chart\n");
+    for(int i=0;i<n;i++){
+        printf("| P%d ",p[sequence[i]].id);
+    }
+
+    printf("\n0");
+    for(int i=0;i<n;i++){
+        printf("    %d",p[sequence[i]].ct);
+    }
+    printf("\n");
+
+}
+int main(){
+    int n;
+    printf("Enter No of Processes: ");
+    scanf("%d",&n);
+    struct process p[n];
+    int sequence[n],seq_idx=0;
+
+    for(int i=0;i<n;i++){
+        printf("Enter Process ID, Arrival Time, Burst Time: ");
+        scanf("%d %d %d",&p[i].id,&p[i].at,&p[i].bt);
+    }
+    for(int i=0;i<n;i++){
+        p[i].is_complete=0;
+    }
+
+    int complete=0,current_time=0;
+
+    while(complete < n){
+        int min_bt=1000,shorest_job=-1;
+        for(int i=0;i<n;i++){
+            if(p[i].at <= current_time && !p[i].is_complete && p[i].bt < min_bt){
+                min_bt=p[i].bt;
+                shorest_job=i;
+            }
+        }
+
+        if(shorest_job == -1){
+            current_time++;
+        }
+        else{
+            p[shorest_job].ct=current_time+p[shorest_job].bt;
+            p[shorest_job].tat=p[shorest_job].ct-p[shorest_job].at;
+            p[shorest_job].wt=p[shorest_job].tat-p[shorest_job].bt;
+            p[shorest_job].rt=current_time-p[shorest_job].at;
+
+            current_time=p[shorest_job].ct;
+            p[shorest_job].is_complete=1;
+            sequence[seq_idx++]=shorest_job;
+            complete++;
+        }
+    }
+
+    ganttchart(p,sequence,seq_idx);
+
+
+    printf("\nProcessID\tAT\tBT\tTAT\tWT\tRT");
+
+    float total_tat= 0,total_wt=0,total_rt=0;
+    int min_at=1000,max_ct=0;
+
+    for(int i=0;i<n;i++){
+        printf("\n%d\t%d\t%d\t%d\t%d\t%d",p[i].id,p[i].at,p[i].bt,p[i].tat,p[i].wt,p[i].rt);
+        total_tat+=p[i].tat;
+        total_wt+=p[i].wt;
+        total_rt+=p[i].rt;
+
+        if(p[i].at<min_at) min_at=p[i].at;
+        if(p[i].ct>max_ct) max_ct=p[i].ct;
+    }
+    float sl=max_ct-min_at;
+    float th=n/sl;
+
+    printf("\nAverage TAT:%f\n",total_tat/n);
+    printf("Average WT:%f\n",total_wt/n);
+    printf("Schedule Length: %f\n",sl);
+    printf("Throughput: %f\n",th);
+
+
+}
