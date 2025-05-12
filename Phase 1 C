@@ -1,0 +1,295 @@
+/*Write a program to Load job  in external memory. Assume size of external memory is 100 by 4 
+* and starting address of program is 00.
+*/
+//Program to implement the init module
+//Program to implement the start_execute module
+#include <stdio.h> //Standard input output header file
+#include <string.h> //Header file for string functions
+#include <stdlib.h> //Standard library header file
+#include <ctype.h> //Header file for character functions
+
+#define MEMORY_ROWS 100 
+#define MEMORY_COLS 4
+#define GREEN "\x1b[92m" //ansi code for green
+#define WHITE "\e[0;37m" //ansi code for white
+
+char memory[MEMORY_ROWS][MEMORY_COLS + 1]; //Memory array to store instructions and data, +1 for null terminator
+char outputBuffer[1000];
+int outputIndex = 0;
+
+typedef struct { //structure to store job output
+    int jobId;
+    char output[1000];
+} JobOutput;
+
+JobOutput jobOutputs[10]; //array of job outputs
+int jobCount = 0;
+
+void initializeSystem() { //function to initialize the system-clear the memory, counters, buffer
+    memset(memory, '*', sizeof(memory));
+    for(int i = 0; i < MEMORY_ROWS; i++) {
+        memory[i][MEMORY_COLS] = '\0';
+    }
+    outputBuffer[0] = '\0';
+
+    printf(GREEN "----------" WHITE "SYSTEM INITIALIZATION" GREEN "----------" WHITE "\n");
+    printf("External Memory:\n");
+    for(int i = 0; i < 100; i++) {
+        printf("Address %02d: ", i);
+        for(int j = 0; j < 4; j++) {
+            printf("%c ", memory[i][j]);
+        }
+        printf("\n");
+    }
+
+    printf("\nToggle Flag (C): %c\n", '*');
+    printf("General Purpose Register (R): %s\n", "****");
+    printf("Instruction Register (IR): %s\n", "****");
+    printf("Instruction Counter (IC): %c\n", '*');
+}
+
+void loadProgram(FILE *inputFile, int jobId) {
+    char line[256];
+    int memoryIndex = 0;
+    int isDataSection = 0;
+    int currentJobId = 0;
+    int foundTargetJob = 0;
+    int gdAddresses[10]; // Store target addresses from GD instructions
+    int gdCount = 0;
+
+    rewind(inputFile);
+
+    while (fgets(line, sizeof(line), inputFile)) {
+        if (strncmp(line, "$AMJ", 4) == 0) {
+            currentJobId = atoi(&line[4]); //The atoi function in C is used to convert a string representation of an integer into an actual integer value
+            if (currentJobId == jobId) {
+                foundTargetJob = 1;
+                isDataSection = 0;
+                memoryIndex = 0;
+                gdCount = 0;
+                printf("\nLoading Job ID: %04d\n", currentJobId);
+                jobOutputs[jobCount].jobId = currentJobId;
+                jobOutputs[jobCount].output[0] = '\0';
+            }
+        } else if (foundTargetJob && strncmp(line, "$DTA", 4) == 0) {
+            isDataSection = 1;
+        } else if (foundTargetJob && strncmp(line, "$END", 4) == 0) {
+            break;
+        } else if (foundTargetJob && !isDataSection) {
+            // Load instruction line
+            char cleanedLine[256] = {0};
+            int cleanIndex = 0;
+            for (int i = 0; i < strlen(line); i++) {
+                if (!isspace(line[i])) {
+                    cleanedLine[cleanIndex++] = line[i];
+                }
+            }
+            cleanedLine[cleanIndex] = '\0';
+
+            for (int i = 0; i < strlen(cleanedLine); i += 4) {
+                if (memoryIndex >= MEMORY_ROWS) break;
+
+                strncpy(memory[memoryIndex], &cleanedLine[i], MEMORY_COLS);
+                memory[memoryIndex][MEMORY_COLS] = '\0';
+
+                if (memory[memoryIndex][0] == 'G' && memory[memoryIndex][1] == 'D') {
+                    int addr = (memory[memoryIndex][2] - '0') * 10 +
+                               (memory[memoryIndex][3] - '0');
+                    gdAddresses[gdCount++] = addr;
+                }
+
+                memoryIndex++;
+            }
+        } else if (foundTargetJob && isDataSection) {
+            line[strcspn(line, "\n")] = '\0';
+
+            if (gdCount > 0) {
+                int addr = gdAddresses[jobOutputs[jobCount].jobId % 10 - (gdCount)];
+                gdCount--;
+
+                int dataLength = strlen(line);
+                int memPos = addr;
+                for (int j = 0; j < dataLength; j += 4) {
+                    if (memPos >= MEMORY_ROWS) break;
+
+                    int charsToCopy = (dataLength - j) > 4 ? 4 : (dataLength - j);
+                    strncpy(memory[memPos], &line[j], charsToCopy);
+                    for (int k = charsToCopy; k < 4; k++) {
+                        memory[memPos][k] = ' ';
+                    }
+                    memory[memPos][4] = '\0';
+                    memPos++;
+                }
+            }
+        }
+    }
+}
+
+void displayMemory() {
+    printf(GREEN "\n----------" WHITE "LOADED MEMORY" GREEN "----------\n" WHITE);
+    for (int i = 0; i < MEMORY_ROWS; i++) {
+        if (strncmp(memory[i], "****", 4) != 0) {
+            printf("Address %02d: %.4s\n", i, memory[i]);
+        }
+    }
+}
+
+void executeProgram(int jobId) {
+    char instructionRegister[5] = {0};
+    char generalRegister[5] = {0};
+    int instructionCounter = 0;
+    int toggleFlag = 0;
+    int haltFlag = 0;
+
+    printf(GREEN "\n----------" WHITE "PROGRAM EXECUTION FOR JOB %04d" GREEN "----------\n" WHITE, jobId);
+
+    outputBuffer[0] = '\0';
+    outputIndex = 0;
+    
+    while (!haltFlag && instructionCounter < 20) {
+        strncpy(instructionRegister, memory[instructionCounter], 4);
+        instructionRegister[4] = '\0';
+        printf("Executing Instruction at %02d: %.4s\n", instructionCounter, instructionRegister);
+        instructionCounter++;
+
+        char opcode[3] = {instructionRegister[0], instructionRegister[1], '\0'};
+        int address = (instructionRegister[2] - '0') * 10 + (instructionRegister[3] - '0');
+
+        if (strcmp(opcode, "PD") == 0) {
+            printf("PD: Printing data from block starting at %02d: ", address);
+            
+            int memPos = address;
+            char dataBlock[256] = {0};
+            int dataPos = 0;
+            
+            while (memPos < MEMORY_ROWS) {
+                if (strncmp(memory[memPos], "****", 4) == 0) break;
+                
+                for (int i = 0; i < 4; i++) {
+                    if (memory[memPos][i] != '*') {
+                        dataBlock[dataPos++] = memory[memPos][i];
+                    }
+                }
+                memPos++;
+            }
+            dataBlock[dataPos] = '\0';
+            
+            int len = strlen(dataBlock);
+            while (len > 0 && isspace(dataBlock[len - 1])) {
+                dataBlock[--len] = '\0';
+            }
+            
+            printf("%s\n", dataBlock);
+            
+            if (outputIndex > 0) {
+                strcat(outputBuffer, "\n");
+            }
+            strcat(outputBuffer, dataBlock);
+            outputIndex++;
+        }
+        else if (strcmp(opcode, "SR") == 0) {
+            strncpy(memory[address], generalRegister, 4);
+            printf("SR: Stored Register '%.4s' into memory at address %02d\n", generalRegister, address);
+        }
+        else if (strcmp(opcode, "LR") == 0) {
+            strncpy(generalRegister, memory[address], 4);
+            generalRegister[4] = '\0';
+            printf("LR: Loaded '%.4s' from address %02d into Register\n", generalRegister, address);
+        }
+        else if (strcmp(opcode, "CR") == 0) {
+            if (strncmp(generalRegister, memory[address], 4) == 0) {
+                toggleFlag = 1;
+                printf("CR: Register '%.4s' equals Memory '%.4s' at address %02d -> Toggle set to 1\n", generalRegister, memory[address], address);
+            } else {
+                toggleFlag = 0;
+                printf("CR: Register '%.4s' does not equal Memory '%.4s' at address %02d -> Toggle set to 0\n", generalRegister, memory[address], address);
+            }
+        }
+        else if (strcmp(opcode, "BT") == 0) {
+            if (toggleFlag == 1) {
+                instructionCounter = address;
+                printf("BT: Toggle is 1 -> Branching to address %02d\n", instructionCounter);
+            } else {
+                printf("BT: Toggle is 0 -> No Branch\n");
+            }
+        }
+        else if (strncmp(instructionRegister, "H", 1) == 0) {
+            printf("Halt encountered. Stopping execution.\n");
+            haltFlag = 1;
+        }
+        else if (strcmp(opcode, "GD") == 0) {
+            printf("GD: Data already loaded during initialization\n");
+        }
+        else {
+            printf("Unknown instruction: %.4s\n", instructionRegister);
+        }
+    }
+    
+    strcpy(jobOutputs[jobCount].output, outputBuffer);
+    jobCount++;
+
+    printf(GREEN "\n----------" WHITE "OUTPUT FOR JOB %04d" GREEN "----------\n" WHITE, jobId);
+    printf("%s\n", outputBuffer);
+}
+
+void output() {
+    FILE *outputFile = fopen("C:/Users/gandh/OneDrive/Desktop/SYBTECHSem2/OS/OSAssignment/Phase1MJ/outputMJ.txt", "w");
+    if (outputFile == NULL) {
+        printf("Error opening output file!\n");
+        return;
+    }
+
+    fprintf(outputFile, "----------FINAL OUTPUT BY JOB----------\n");
+    for (int j = 0; j < jobCount; j++) {
+        fprintf(outputFile, "\nJob ID: %04d\n", jobOutputs[j].jobId);
+        fprintf(outputFile, "Output:\n%s\n", jobOutputs[j].output);
+    }
+    fclose(outputFile);
+
+    printf(GREEN "\n----------" WHITE "ALL OUTPUTS WRITTEN TO FILE" GREEN "----------\n" WHITE);
+}
+
+int main() {
+    FILE *inputFile = fopen("C:/Users/gandh/OneDrive/Desktop/SYBTECHSem2/OS/OSAssignment/Phase1MJ/inputMJ.txt", "r");
+    if (inputFile == NULL) {
+        printf("Error opening file!\n");
+        return 1;
+    }
+
+    int jobIds[10];
+    int totalJobs = 0;
+    char line[256];
+    
+    rewind(inputFile);
+    while (fgets(line, sizeof(line), inputFile)) {
+        if (strncmp(line, "$AMJ", 4) == 0) {
+            jobIds[totalJobs++] = atoi(&line[4]);
+        }
+    }
+
+    for (int i = totalJobs-1; i >= 0; i--) {
+        initializeSystem();
+        loadProgram(inputFile, jobIds[i]);
+        displayMemory();
+        executeProgram(jobIds[i]);
+    }
+    printf(GREEN "\n----------" WHITE "FINAL OUTPUTS FOR ALL JOBS" GREEN "----------\n" WHITE);
+    for (int j = 0; j < jobCount; j++) {
+        printf("\nJob ID: %04d\n", jobOutputs[j].jobId);
+        printf("Output:\n%s\n", jobOutputs[j].output);
+    }
+
+    output();
+    fclose(inputFile);
+
+    return 0;
+}
+
+$AMJ
+GD20PD20GD30PD30GD40PD40LR20CR30H
+$DTA
+ABCD
+ABC
+match
+dontmatch
+$END
