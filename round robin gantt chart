@@ -1,0 +1,148 @@
+#include <stdio.h>
+#define MAX 100
+
+struct process {
+    int pid, at, bt, ct, tat, wt, rt, rem_bt;
+    int is_completed;
+};
+
+void GanttChart(int gantt[], int time[], int n) {
+    printf("\nGantt Chart:\n ");
+    for (int i = 0; i < n; i++) {
+        printf("------");
+    }
+    printf("\n|");
+    for (int i = 0; i < n; i++) {
+        if (gantt[i] == -1)
+            printf(" IDLE|");
+        else
+            printf(" P%d |", gantt[i]);
+    }
+    printf("\n ");
+    for (int i = 0; i < n; i++) {
+        printf("------");
+    }
+    printf("\n%d", time[0]);
+    for (int i = 1; i < n + 1; i++) {
+        printf("    %d", time[i]);
+    }
+    printf("\n");
+}
+
+int main() {
+    int n, tq;
+    printf("Enter number of processes: ");
+    scanf("%d", &n);
+
+    struct process p[n];
+
+    printf("Enter Process ID, Arrival Time, and Burst Time:\n");
+    for (int i = 0; i < n; i++) {
+        printf("Process %d:\n", i + 1);
+        printf("PID: ");
+        scanf("%d", &p[i].pid);
+        printf("Arrival Time: ");
+        scanf("%d", &p[i].at);
+        printf("Burst Time: ");
+        scanf("%d", &p[i].bt);
+        p[i].rem_bt = p[i].bt;
+        p[i].is_completed = 0;
+        p[i].rt = -1;
+    }
+
+    printf("Enter Time Quantum: ");
+    scanf("%d", &tq);
+
+    int time = 0, completed = 0;
+    int queue[MAX], front = 0, rear = 0;
+    int visited[n];
+    for (int i = 0; i < n; i++) visited[i] = 0;
+
+    int gantt[MAX], gantt_time[MAX + 1];
+    int g_index = 0;
+
+    queue[rear++] = 0;
+    visited[0] = 1;
+
+    while (completed < n) {
+        int idx = queue[front++];
+        if (front == MAX) front = 0;
+
+        if (p[idx].rt == -1) {
+            p[idx].rt = time - p[idx].at;
+        }
+
+        gantt[g_index] = p[idx].pid;
+        gantt_time[g_index] = time;
+        g_index++;
+
+        int exec_time = (p[idx].rem_bt > tq) ? tq : p[idx].rem_bt;
+        time += exec_time;
+        p[idx].rem_bt -= exec_time;
+
+        // Add newly arrived processes to the queue
+        for (int i = 0; i < n; i++) {
+            if (i != idx && p[i].at <= time && !visited[i]) {
+                queue[rear++] = i;
+                if (rear == MAX) rear = 0;
+                visited[i] = 1;
+            }
+        }
+
+        if (p[idx].rem_bt == 0) {
+            p[idx].ct = time;
+            p[idx].tat = p[idx].ct - p[idx].at;
+            p[idx].wt = p[idx].tat - p[idx].bt;
+            p[idx].is_completed = 1;
+            completed++;
+        } else {
+            queue[rear++] = idx;
+            if (rear == MAX) rear = 0;
+        }
+
+        // If queue is empty, jump to next available process
+        if (front == rear && completed < n) {
+            gantt[g_index] = -1;
+            gantt_time[g_index] = time;
+            g_index++;
+
+            for (int i = 0; i < n; i++) {
+                if (!visited[i]) {
+                    queue[rear++] = i;
+                    if (rear == MAX) rear = 0;
+                    visited[i] = 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    gantt_time[g_index] = time;
+
+    GanttChart(gantt, gantt_time, g_index);
+
+    float total_tat = 0, total_wt = 0, total_rt = 0;
+    int min_at = p[0].at, max_ct = p[0].ct;
+
+    printf("\nProcess\tAT\tBT\tCT\tTAT\tWT\tRT\n");
+    for (int i = 0; i < n; i++) {
+        printf("P%d\t%d\t%d\t%d\t%d\t%d\t%d\n", 
+               p[i].pid, p[i].at, p[i].bt, p[i].ct, p[i].tat, p[i].wt, p[i].rt);
+        total_tat += p[i].tat;
+        total_wt += p[i].wt;
+        total_rt += p[i].rt;
+        if (p[i].at < min_at) min_at = p[i].at;
+        if (p[i].ct > max_ct) max_ct = p[i].ct;
+    }
+
+    float sl = max_ct - min_at;
+    float th = (float)n / sl;
+
+    printf("\nAverage Turnaround Time: %.2f\n", total_tat / n);
+    printf("Average Waiting Time: %.2f\n", total_wt / n);
+    printf("Average Response Time: %.2f\n", total_rt / n);
+    printf("Schedule Length: %.2f\n", sl);
+    printf("Throughput: %.2f process/unit time\n", th);
+
+    return 0;
+}
